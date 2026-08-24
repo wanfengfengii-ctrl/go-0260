@@ -1,0 +1,10 @@
+{
+  "name": "cacao-ferment-yard-release-gate-frontend",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CacaoFerment browser joint-inspection console backed by the Go API",
+  "scripts": {
+    "build": "node build.mjs"
+  }
+}
