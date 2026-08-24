@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>CacaoFerment 联检控制台</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>CacaoFerment 可可发酵箱转入晒场前联检闭环</h1>
+      <p id="health" class="muted">正在连接后端…</p>
+    </header>
+
+    <section class="card">
+      <h2>锁定联检任务</h2>
+      <form id="lock">
+        <label>规则版本 <input name="rule_version" value="v1" required /></label>
+        <label>收果地块 <input name="plot_id" value="plot-1" required /></label>
+        <label>品种批次 <input name="variety_batch_id" value="variety-criollo-1" required /></label>
+        <label>发酵箱（逗号分隔） <input name="bin_ids" value="bin-1,bin-2" required /></label>
+        <label>装箱重量（克） <input name="boxed_weight_grams" type="number" value="120000" required /></label>
+        <label>转晒窗口 <input name="drying_window_id" value="window-1" required /></label>
+        <button type="submit">锁定</button>
+      </form>
+      <pre id="lock-result" class="muted"></pre>
+    </section>
+
+    <section class="card">
+      <h2>任务与租约</h2>
+      <ul id="tasks" class="task-list"></ul>
+    </section>
+
+    <section id="detail" class="card hidden">
+      <h2>任务详情 <span id="detail-id" class="muted"></span></h2>
+      <div id="detail-body"></div>
+      <div class="actions">
+        <label>复核人 <input id="reviewer" value="reviewer-c" /></label>
+        <select id="decision">
+          <option value="approve">approve</option>
+          <option value="reject">reject</option>
+        </select>
+        <button id="btn-review" type="button">提交复核</button>
+        <button id="btn-finalize" type="button">终局：可转晒</button>
+      </div>
+      <pre id="action-result" class="muted"></pre>
+    </section>
+
+    <script src="app.js"></script>
+  </body>
+</html>
