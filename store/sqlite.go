@@ -190,6 +190,11 @@ func (s *sqliteStore) InTx(ctx context.Context, fn func(tx Store) error) error {
 	}
 	scoped := &sqliteTx{sqliteBase: sqliteBase{q: tx}}
 	if err := fn(scoped); err != nil {
+		// Roll back so the underlying connection is released. With
+		// SetMaxOpenConns(1), an abandoned (uncommitted, unrolled-back)
+		// transaction holds the sole connection, so every subsequent call
+		// blocks until the caller's context times out.
+		_ = tx.Rollback()
 		return err
 	}
 	if err := tx.Commit(); err != nil {
