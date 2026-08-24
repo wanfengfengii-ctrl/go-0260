@@ -45,19 +45,25 @@ func (s *Service) ConfirmBoxing(ctx context.Context, req BoxingRequest) (BoxingR
 		if err := s.ensureOpen(t); err != nil {
 			return err
 		}
-		if err := s.ensureState(t, task.StatePendingBoxing); err != nil {
-			return err
-		}
-		snap, err := s.taskSnapshot(t)
-		if err != nil {
-			return err
-		}
+		// Replay a previously recorded confirmation before the state guard: the
+		// first boxer's confirmation may have succeeded while the task was in
+		// pending_boxing, and a second boxer can since have advanced it to
+		// equipment_occupied. Retrying the first boxer's original operation key
+		// with identical content must idempotently return that stored result
+		// rather than reject on the now-advanced state.
 		if cached, err := s.resolveOperation(tx, t.TaskID, req.OperationKey, reqHash); err != nil {
 			return err
 		} else if cached != nil {
 			boxers := currentBoxers(tx, t.TaskID)
 			result = BoxingResult{Task: t, BoxerIDs: boxers, Confirmations: len(boxers)}
 			return nil
+		}
+		if err := s.ensureState(t, task.StatePendingBoxing); err != nil {
+			return err
+		}
+		snap, err := s.taskSnapshot(t)
+		if err != nil {
+			return err
 		}
 		if !snap.IsQualifiedReviewer(req.BoxerID) {
 			return coded(CodeReviewerNotQualified, "boxer %q is not qualified", req.BoxerID)
