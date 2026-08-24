@@ -91,6 +91,9 @@ func (s *Service) SubmitChemistry(ctx context.Context, req ChemistryRequest) (Ch
 			CreatedAtTick: s.nextTick(),
 		}
 		ev.PayloadHash = hashBytes(encodeInts(ev.IntegerValues))
+		if err := tx.SaveEvidence(ctx, ev); err != nil {
+			return err
+		}
 
 		t.State = task.StatePendingReview
 		if err := tx.SaveTask(ctx, t); err != nil {
