@@ -199,6 +199,23 @@ func (s *Service) Finalize(ctx context.Context, req FinalizeRequest) (FinalizeRe
 		if err != nil {
 			return err
 		}
+		// Idempotent retry takes precedence over every state check. A finalize that
+		// already committed — most often because the client timed out after the
+		// credential was issued — must replay its stored terminal result instead of
+		// being rejected by the open/generation/state checks below, which now see a
+		// terminal task. The request hash pins the content, so a reused key with
+		// different content still surfaces as a stable content conflict.
+		if cached, err := s.resolveOperation(tx, t.TaskID, req.OperationKey, reqHash); err != nil {
+			return err
+		} else if cached != nil {
+			if cred, ok, _ := tx.GetCredential(ctx, t.TaskID); ok {
+				result = FinalizeResult{Task: t, Credential: cred}
+			} else {
+				result = FinalizeResult{Task: t}
+			}
+			return nil
+		}
+
 		if err := s.ensureGeneration(t, req.Generation); err != nil {
 			return err
 		}
@@ -210,16 +227,6 @@ func (s *Service) Finalize(ctx context.Context, req FinalizeRequest) (FinalizeRe
 		}
 		if !req.Decision.Valid() {
 			return coded(CodeInvalidDecision, "invalid terminal decision %q", req.Decision)
-		}
-		if cached, err := s.resolveOperation(tx, t.TaskID, req.OperationKey, reqHash); err != nil {
-			return err
-		} else if cached != nil {
-			if cred, ok, _ := tx.GetCredential(ctx, t.TaskID); ok {
-				result = FinalizeResult{Task: t, Credential: cred}
-			} else {
-				result = FinalizeResult{Task: t}
-			}
-			return nil
 		}
 
 		snap, err := s.taskSnapshot(t)
