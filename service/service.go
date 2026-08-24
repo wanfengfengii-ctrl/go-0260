@@ -198,3 +198,30 @@ func (s *Service) mustLease(tx store.Store, l lease.LeaseRecord) error {
 	}
 	return nil
 }
+
+// releaseTaskLeases flips every active lease of a task to released and clears
+// its occupancy. It is invoked when a task reaches a terminal state so the
+// fermentation bins, probes, plate wells, and drying window become available
+// for the next open task (rule 3: an effective lease exists only across open
+// tasks). Releasing is idempotent: a lease that is already released is left
+// untouched, so replaying a finalize after restart is safe.
+func (s *Service) releaseTaskLeases(tx store.Store, taskID string, tick int64) error {
+	leases, err := tx.ListLeases(context.Background(), taskID)
+	if err != nil {
+		return err
+	}
+	for _, l := range leases {
+		if !l.Active() {
+			continue
+		}
+		l.Status = lease.LeaseReleased
+		l.ReleasedAtTick = tick
+		if l.ReleaseReason == "" {
+			l.ReleaseReason = "task_terminal"
+		}
+		if err := tx.SaveLease(context.Background(), l); err != nil {
+			return err
+		}
+	}
+	return nil
+}

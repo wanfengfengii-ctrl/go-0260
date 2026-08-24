@@ -265,6 +265,11 @@ func (s *Service) Finalize(ctx context.Context, req FinalizeRequest) (FinalizeRe
 		if err := tx.SaveTask(ctx, t); err != nil {
 			return err
 		}
+		// A terminal task is no longer open, so its fermentation bins, probes,
+		// plate wells, and drying window are freed for the next batch (rule 3).
+		if err := s.releaseTaskLeases(tx, t.TaskID, tick); err != nil {
+			return err
+		}
 		if err := s.finishOperation(tx, &t, req.OperationKey, "finalize", "", reqHash, map[string]any{
 			"task": t, "credential": cred,
 		}); err != nil {

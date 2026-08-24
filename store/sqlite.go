@@ -268,9 +268,17 @@ func (s *sqliteBase) SaveLease(ctx context.Context, l lease.LeaseRecord) error {
 	_, err := s.q.ExecContext(ctx,
 		`INSERT INTO leases (lease_id, task_id, generation, resource_type, resource_id,
 		                    status, acquired_at_tick, released_at_tick, release_reason)
-		 VALUES (?,?,?,?,?,?,?,?,?)`,
+		 VALUES (?,?,?,?,?,?,?,?,?)
+		 ON CONFLICT(lease_id) DO UPDATE SET
+		     status = excluded.status,
+		     acquired_at_tick = excluded.acquired_at_tick,
+		     released_at_tick = excluded.released_at_tick,
+		     release_reason = excluded.release_reason`,
 		l.LeaseID, l.TaskID, l.Generation, string(l.ResourceType), l.ResourceID,
 		string(l.Status), l.AcquiredAtTick, l.ReleasedAtTick, l.ReleaseReason)
+	// A conflict on the partial idx_leases_active index means another open task
+	// still holds the resource; a re-save of an existing lease_id (e.g. a
+	// release) is handled by the ON CONFLICT update above and never reaches here.
 	if isConstraint(err) {
 		return ErrResourceOccupied
 	}
