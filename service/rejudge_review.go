@@ -229,7 +229,7 @@ func (s *Service) Finalize(ctx context.Context, req FinalizeRequest) (FinalizeRe
 		boxers := currentBoxers(tx, t.TaskID)
 		reviews := mustReviews(tx, t.TaskID)
 		verdict := arbiter.AssessReviews(reviews, boxers, snap)
-		hasRejudge := hasRejudgement(tx, t.TaskID)
+		hasRejudge := hasRejudgement(tx, t.TaskID, t.Generation)
 
 		if req.Decision != arbiter.DecisionCancelled {
 			if !verdict.Complete {
@@ -276,9 +276,24 @@ func (s *Service) Finalize(ctx context.Context, req FinalizeRequest) (FinalizeRe
 	return result, err
 }
 
-func hasRejudgement(tx store.Store, taskID string) bool {
-	evs, _ := tx.ListEvidence(context.Background(), taskID)
+// currentGenerationEvidence returns the evidence versions recorded for the
+// given generation. Old-generation evidence is retained as an audit trail but
+// must not drive the current generation's conclusions (domain rule 7, failure
+// boundary 7): a late or superseded reading stays on the record without
+// advancing the state machine or shaping the terminal outcome.
+func currentGenerationEvidence(ctx context.Context, tx store.Store, taskID string, generation int64) []evidence.EvidenceVersion {
+	evs, _ := tx.ListEvidence(ctx, taskID)
+	out := make([]evidence.EvidenceVersion, 0, len(evs))
 	for _, e := range evs {
+		if e.Generation == generation {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func hasRejudgement(tx store.Store, taskID string, generation int64) bool {
+	for _, e := range currentGenerationEvidence(context.Background(), tx, taskID, generation) {
 		if e.EvidenceKind == evidence.EvidenceRejudgement {
 			return true
 		}

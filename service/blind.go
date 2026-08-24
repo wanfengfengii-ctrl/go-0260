@@ -71,7 +71,7 @@ func (s *Service) SubmitBlindSample(ctx context.Context, req BlindSampleRequest)
 			if err != nil {
 				return err
 			}
-			if allBlindScored(ctx, tx, t.TaskID) {
+			if allBlindScored(ctx, tx, t.TaskID, t.Generation) {
 				t.State = task.StateToxinVerification
 			}
 		case task.StateToxinVerification:
@@ -187,9 +187,11 @@ func (s *Service) revealIfComplete(ctx context.Context, tx store.Store, t task.F
 	if err != nil {
 		return false, err
 	}
+	// Only the current generation's toxin readings close the reveal gate; an
+	// old-generation late reading must not satisfy a sample for this generation.
 	toxin := make(map[string]bool)
 	for _, e := range evs {
-		if e.EvidenceKind == evidence.EvidenceToxin {
+		if e.EvidenceKind == evidence.EvidenceToxin && e.Generation == t.Generation {
 			toxin[e.SubjectKey] = true
 		}
 	}
@@ -226,7 +228,7 @@ func findBlindSample(ctx context.Context, tx store.Store, taskID, code string) (
 	return evidence.BlindSample{}, coded(CodeNotBlindFound, "blind sample %q not found", code)
 }
 
-func allBlindScored(ctx context.Context, tx store.Store, taskID string) bool {
+func allBlindScored(ctx context.Context, tx store.Store, taskID string, generation int64) bool {
 	samples, err := tx.ListBlindSamples(ctx, taskID)
 	if err != nil {
 		return false
@@ -235,9 +237,11 @@ func allBlindScored(ctx context.Context, tx store.Store, taskID string) bool {
 	if err != nil {
 		return false
 	}
+	// Only cut scores recorded for the current generation advance the state
+	// machine; an old-generation score must not satisfy a sample this round.
 	scored := make(map[string]bool)
 	for _, e := range evs {
-		if e.EvidenceKind == evidence.EvidenceCutScore {
+		if e.EvidenceKind == evidence.EvidenceCutScore && e.Generation == generation {
 			scored[e.SubjectKey] = true
 		}
 	}
