@@ -104,8 +104,35 @@ func (s *Service) driveEquipment(ctx context.Context, tx store.Store, t task.Fer
 }
 
 // callAdapter invokes one instrument, records the attempt, and returns it.
+//
+// A failed instrument imposes a retry window: the adapter may not be called
+// again until the logical clock reaches the previously recorded RetryAfterTick.
+// Re-entering StartEquipment inside that window does not re-drive the
+// instrument or advance its fault script; instead an auditable AdapterPending
+// attempt is recorded carrying the still-open window, so occupancy is never
+// released early and no passing result is fabricated before the retry time.
 func (s *Service) callAdapter(ctx context.Context, tx store.Store, t task.FermentTask, kind evidence.AdapterKind, target string) evidence.AdapterAttempt {
 	logicalTick := s.nextTick()
+
+	if prev, ok := lastAttemptFor(tx, t.TaskID, kind, target); ok && prev.Status != evidence.AdapterSucceeded && prev.RetryAfterTick > logicalTick {
+		// Still within the retry window: record a pending attempt that carries
+		// the open deadline without advancing the adapter's fault script.
+		att := evidence.AdapterAttempt{
+			AttemptID:       s.nextID("attempt"),
+			TaskID:          t.TaskID,
+			Generation:      t.Generation,
+			AdapterKind:     kind,
+			TargetKey:       target,
+			ScriptStep:      prev.ScriptStep,
+			LogicalTick:     logicalTick,
+			Status:          evidence.AdapterPending,
+			StableErrorCode: prev.StableErrorCode,
+			RetryAfterTick:  prev.RetryAfterTick,
+		}
+		_ = tx.SaveAdapterAttempt(ctx, att)
+		return att
+	}
+
 	res := adapter.Result{Status: evidence.AdapterSucceeded}
 	if s.adapters != nil {
 		if a := s.adapters.Get(kind); a != nil {
@@ -131,6 +158,25 @@ func (s *Service) callAdapter(ctx context.Context, tx store.Store, t task.Fermen
 	}
 	_ = tx.SaveAdapterAttempt(ctx, att)
 	return att
+}
+
+// lastAttemptFor returns the most recently recorded attempt for one instrument
+// target of a task, or ok=false if none exists. It is used to enforce the
+// retry-after window before re-driving an adapter.
+func lastAttemptFor(tx store.Store, taskID string, kind evidence.AdapterKind, target string) (evidence.AdapterAttempt, bool) {
+	attempts, _ := tx.ListAdapterAttempts(context.Background(), taskID)
+	var last evidence.AdapterAttempt
+	found := false
+	for _, a := range attempts {
+		if a.AdapterKind != kind || a.TargetKey != target {
+			continue
+		}
+		// ListAdapterAttempts is ordered by logical_tick, so a later entry is
+		// always more recent.
+		last = a
+		found = true
+	}
+	return last, found
 }
 
 func mustAttempts(tx store.Store, taskID string) []evidence.AdapterAttempt {
