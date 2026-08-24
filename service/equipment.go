@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 
 	"cacaoferment/adapter"
 	"cacaoferment/evidence"
@@ -51,8 +52,15 @@ func (s *Service) StartEquipment(ctx context.Context, req StartEquipmentRequest)
 		if cached, err := s.resolveOperation(tx, t.TaskID, req.OperationKey, reqHash); err != nil {
 			return err
 		} else if cached != nil {
-			result = StartEquipmentResult{Task: t, Attempts: mustAttempts(tx, t.TaskID)}
-			result.Started = t.State == task.StateTurnCollection
+			// Replay the exact stored response. Re-querying the live attempts
+			// would fold in attempts produced by later retries under different
+			// operation keys, so the same idempotent replay would grow from
+			// the original attempt set to the accumulated one. The task may
+			// also have advanced since the original call, so the started flag
+			// is taken from the stored response rather than recomputed.
+			if err := json.Unmarshal(cached, &result); err != nil {
+				return err
+			}
 			return nil
 		}
 
@@ -131,9 +139,4 @@ func (s *Service) callAdapter(ctx context.Context, tx store.Store, t task.Fermen
 	}
 	_ = tx.SaveAdapterAttempt(ctx, att)
 	return att
-}
-
-func mustAttempts(tx store.Store, taskID string) []evidence.AdapterAttempt {
-	attempts, _ := tx.ListAdapterAttempts(context.Background(), taskID)
-	return attempts
 }
