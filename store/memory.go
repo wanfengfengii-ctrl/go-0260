@@ -85,7 +85,7 @@ func (c *memCore) clone() *memCore {
 }
 
 func opKey(taskID, key string) string                     { return taskID + "\x00" + key }
-func cellKey(taskID string, node int) string              { return taskID + "\x00" + itoa(node) }
+func cellKey(taskID, binID string, node int) string        { return taskID + "\x00" + binID + "\x00" + itoa(node) }
 func blindKey(taskID, code string) string                 { return taskID + "\x00" + code }
 func resourceKey(rt lease.ResourceType, id string) string { return string(rt) + "\x00" + id }
 
@@ -262,7 +262,7 @@ func (c *memCore) ListEvidence(_ context.Context, taskID string) ([]evidence.Evi
 // --- coverage cells ---
 
 func (c *memCore) SaveCoverageCell(_ context.Context, cell evidence.TurnCoverageCell) error {
-	k := cellKey(cell.TaskID, cell.TurnNode)
+	k := cellKey(cell.TaskID, cell.BinID, cell.TurnNode)
 	if _, exists := c.cells[k]; exists {
 		return ErrDuplicate
 	}
@@ -277,7 +277,12 @@ func (c *memCore) ListCoverageCells(_ context.Context, taskID string) ([]evidenc
 			out = append(out, cell)
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].TurnNode < out[j].TurnNode })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].BinID != out[j].BinID {
+			return out[i].BinID < out[j].BinID
+		}
+		return out[i].TurnNode < out[j].TurnNode
+	})
 	return out, nil
 }
 

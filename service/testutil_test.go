@@ -135,6 +135,9 @@ func collect(t *testing.T, svc *service.Service, id string) {
 			{BinID: "bin-1", TurnNode: 1, TemperatureCentiC: 4000, DurationMinutes: 60, TurnCount: 1},
 			{BinID: "bin-1", TurnNode: 2, TemperatureCentiC: 4300, DurationMinutes: 120, TurnCount: 2},
 			{BinID: "bin-1", TurnNode: 3, TemperatureCentiC: 4600, DurationMinutes: 180, TurnCount: 3},
+			{BinID: "bin-2", TurnNode: 1, TemperatureCentiC: 4050, DurationMinutes: 60, TurnCount: 1},
+			{BinID: "bin-2", TurnNode: 2, TemperatureCentiC: 4350, DurationMinutes: 120, TurnCount: 2},
+			{BinID: "bin-2", TurnNode: 3, TemperatureCentiC: 4650, DurationMinutes: 180, TurnCount: 3},
 		},
 	})
 	if err != nil {

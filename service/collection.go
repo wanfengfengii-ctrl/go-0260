@@ -69,7 +69,7 @@ func (s *Service) SubmitTurnReadings(ctx context.Context, req TurnReadingsReques
 			return err
 		} else if cached != nil {
 			result = TurnReadingsResult{Task: t, Cells: mustCells(tx, t.TaskID)}
-			result.Complete = coverageComplete(snap, result.Cells)
+			result.Complete = coverageComplete(snap, t.BinIDs, result.Cells)
 			return nil
 		}
 
@@ -77,7 +77,7 @@ func (s *Service) SubmitTurnReadings(ctx context.Context, req TurnReadingsReques
 		if err != nil {
 			return err
 		}
-		complete := coverageComplete(snap, cells)
+		complete := coverageComplete(snap, t.BinIDs, cells)
 		if complete {
 			t.State = task.StateCutScoring
 		}
@@ -102,55 +102,76 @@ func (s *Service) applyTurnReadings(ctx context.Context, tx store.Store, t task.
 	if err != nil {
 		return nil, nil, err
 	}
-	byNode := make(map[int]evidence.TurnCoverageCell, len(existing))
+	// Coverage is keyed per locked bin: each (bin, turn node) pair closes
+	// independently so a partial-bin submission cannot be mistaken for full
+	// coverage of the whole task.
+	byCell := make(map[string]evidence.TurnCoverageCell, len(existing))
 	for _, c := range existing {
-		byNode[c.TurnNode] = c
+		byCell[cellKeyOf(c.BinID, c.TurnNode)] = c
 	}
 
-	// Sort the incoming readings by turn node for deterministic processing.
+	// Sort the incoming readings by bin then turn node for deterministic
+	// processing, and reject intra-batch duplicates up front so a single request
+	// cannot double-cover a (bin, node) slot.
 	ordered := append([]TurnReading(nil), readings...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].TurnNode < ordered[j].TurnNode })
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].BinID != ordered[j].BinID {
+			return ordered[i].BinID < ordered[j].BinID
+		}
+		return ordered[i].TurnNode < ordered[j].TurnNode
+	})
+	seenInBatch := make(map[string]bool, len(ordered))
+	for _, r := range ordered {
+		if seenInBatch[cellKeyOf(r.BinID, r.TurnNode)] {
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q repeated in the same batch", r.TurnNode, r.BinID)
+		}
+		seenInBatch[cellKeyOf(r.BinID, r.TurnNode)] = true
+	}
 
 	var anomalies []arbiter.AnomalyKind
 	for _, r := range ordered {
+		if _, ok := turnBinIndex(t.BinIDs, r.BinID); !ok {
+			return nil, nil, coded(CodeInvalidReading, "bin %q is not a locked bin", r.BinID)
+		}
 		nodeIndex, ok := turnNodeIndex(snap.TurnNodes, r.TurnNode)
 		if !ok {
 			return nil, nil, coded(CodeInvalidReading, "turn node %d is not in the locked schedule", r.TurnNode)
 		}
-		if _, dup := byNode[r.TurnNode]; dup {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d already covered", r.TurnNode)
+		key := cellKeyOf(r.BinID, r.TurnNode)
+		if _, dup := byCell[key]; dup {
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q already covered", r.TurnNode, r.BinID)
 		}
 		if r.GapFillFlag && nodeIndex == 0 {
 			return nil, nil, coded(CodeInvalidReading, "gap fill is not allowed for the first turn node")
 		}
-		// Predecessor coverage is required to derive the slope.
+		// Predecessor coverage for this bin is required to derive the slope.
 		var prevTemp, prevDur int64
 		if nodeIndex == 0 {
 			prevTemp, prevDur = snap.TemperatureThresholds.AmbientCentiC, 0
 		} else {
-			prev, ok := byNode[snap.TurnNodes[nodeIndex-1]]
+			prev, ok := byCell[cellKeyOf(r.BinID, snap.TurnNodes[nodeIndex-1])]
 			if !ok {
-				return nil, nil, coded(CodeInvalidReading, "turn node %d is missing before node %d", snap.TurnNodes[nodeIndex-1], r.TurnNode)
+				return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q is missing before node %d", snap.TurnNodes[nodeIndex-1], r.BinID, r.TurnNode)
 			}
 			prevTemp, prevDur = prev.TemperatureCentiC, prev.DurationMinutes
 		}
 		if r.DurationMinutes <= 0 {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d has non-positive duration", r.TurnNode)
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q has non-positive duration", r.TurnNode, r.BinID)
 		}
 		thr := snap.TemperatureThresholds
 		if r.TemperatureCentiC < thr.MinCentiC || r.TemperatureCentiC > thr.MaxCentiC {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d temperature out of range", r.TurnNode)
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q temperature out of range", r.TurnNode, r.BinID)
 		}
 		if r.DurationMinutes < thr.MinDurationMinutes || r.DurationMinutes > thr.MaxDurationMinutes {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d duration out of range", r.TurnNode)
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q duration out of range", r.TurnNode, r.BinID)
 		}
 		if r.TurnCount < 0 || r.TurnCount > thr.MaxTurnCount {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d turn count out of range", r.TurnNode)
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q turn count out of range", r.TurnNode, r.BinID)
 		}
 
 		slope, err := evidence.DeriveSlope(prevTemp, r.TemperatureCentiC, prevDur, r.DurationMinutes)
 		if err != nil {
-			return nil, nil, coded(CodeInvalidReading, "turn node %d slope derivation failed: %v", r.TurnNode, err)
+			return nil, nil, coded(CodeInvalidReading, "turn node %d for bin %q slope derivation failed: %v", r.TurnNode, r.BinID, err)
 		}
 		cell := evidence.TurnCoverageCell{
 			TaskID:            t.TaskID,
@@ -167,7 +188,7 @@ func (s *Service) applyTurnReadings(ctx context.Context, tx store.Store, t task.
 		if err := tx.SaveCoverageCell(ctx, cell); err != nil {
 			return nil, nil, err
 		}
-		byNode[r.TurnNode] = cell
+		byCell[key] = cell
 
 		nodeAnomalies := arbiter.EvaluateTemperature(r.TemperatureCentiC, slope, r.DurationMinutes, r.TurnCount, thr)
 		for _, a := range nodeAnomalies {
@@ -209,20 +230,47 @@ func (s *Service) recordTurnEvidence(ctx context.Context, tx store.Store, t task
 	return tx.SaveEvidence(ctx, ev)
 }
 
-func coverageComplete(snap catalog.RuleSnapshot, cells []evidence.TurnCoverageCell) bool {
-	if len(cells) < len(snap.TurnNodes) {
-		return false
-	}
-	have := make(map[int]bool, len(cells))
+func coverageComplete(snap catalog.RuleSnapshot, binIDs []string, cells []evidence.TurnCoverageCell) bool {
+	// Coverage closes per locked bin: every locked bin must cover every locked
+	// turn node before the task may advance. A partial-bin submission therefore
+	// cannot be mistaken for full coverage of the whole task.
+	have := make(map[string]map[int]bool, len(binIDs))
 	for _, c := range cells {
-		have[c.TurnNode] = true
+		if have[c.BinID] == nil {
+			have[c.BinID] = make(map[int]bool, len(snap.TurnNodes))
+		}
+		have[c.BinID][c.TurnNode] = true
 	}
-	for _, n := range snap.TurnNodes {
-		if !have[n] {
+	for _, b := range binIDs {
+		nodes, ok := have[b]
+		if !ok {
 			return false
+		}
+		for _, n := range snap.TurnNodes {
+			if !nodes[n] {
+				return false
+			}
 		}
 	}
 	return true
+}
+
+// cellKeyOf is the (bin, turn node) identity used to deduplicate coverage. It
+// mirrors the store-level primary key so the service and store agree on what
+// makes one coverage slot distinct.
+func cellKeyOf(binID string, turnNode int) string {
+	return binID + ":" + itoa(turnNode)
+}
+
+// turnBinIndex reports whether the given bin is one of the locked bins and
+// returns its position.
+func turnBinIndex(binIDs []string, binID string) (int, bool) {
+	for i, b := range binIDs {
+		if b == binID {
+			return i, true
+		}
+	}
+	return 0, false
 }
 
 func turnNodeIndex(nodes []int, node int) (int, bool) {

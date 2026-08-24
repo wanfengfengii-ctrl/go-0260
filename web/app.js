@@ -92,9 +92,9 @@ function renderAudit(a) {
   html.push("<h3>翻堆覆盖</h3>");
   if (cells.length === 0) html.push("<p class='muted'>无覆盖读数</p>");
   else {
-    html.push("<table><thead><tr><th>节点</th><th>温度(℃)</th><th>分钟</th><th>翻堆</th><th>斜率(milli/min)</th><th>有效</th></tr></thead><tbody>");
+    html.push("<table><thead><tr><th>箱位</th><th>节点</th><th>温度(℃)</th><th>分钟</th><th>翻堆</th><th>斜率(milli/min)</th><th>有效</th></tr></thead><tbody>");
     for (const c of cells) {
-      html.push(`<tr><td>${esc(c.TurnNode)}</td><td>${(c.TemperatureCentiC / 100).toFixed(2)}</td><td>${esc(c.DurationMinutes)}</td><td>${esc(c.TurnCount)}</td><td>${esc(c.SlopeMilliPerMin)}</td><td>${c.Valid ? "是" : "否"}</td></tr>`);
+      html.push(`<tr><td>${esc(c.BinID || "—")}</td><td>${esc(c.TurnNode)}</td><td>${(c.TemperatureCentiC / 100).toFixed(2)}</td><td>${esc(c.DurationMinutes)}</td><td>${esc(c.TurnCount)}</td><td>${esc(c.SlopeMilliPerMin)}</td><td>${c.Valid ? "是" : "否"}</td></tr>`);
     }
     html.push("</tbody></table>");
   }

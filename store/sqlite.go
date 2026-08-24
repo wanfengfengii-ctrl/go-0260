@@ -98,7 +98,7 @@ CREATE TABLE IF NOT EXISTS coverage_cells (
 	gap_fill_flag       INTEGER NOT NULL,
 	slope_milli_per_min INTEGER NOT NULL,
 	valid               INTEGER NOT NULL,
-	PRIMARY KEY (task_id, turn_node)
+	PRIMARY KEY (task_id, bin_id, turn_node)
 );
 CREATE TABLE IF NOT EXISTS blind_samples (
 	task_id          TEXT NOT NULL,
@@ -161,11 +161,55 @@ func OpenSQLite(ctx context.Context, dir string) (Store, error) {
 		return nil, fmt.Errorf("store: open: %w", err)
 	}
 	db.SetMaxOpenConns(1) // single writer; WAL readers plus serialized writes
+	if err := migrateCoverageCells(ctx, db); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("store: migrate coverage cells: %w", err)
+	}
 	if _, err := db.ExecContext(ctx, sqliteSchema); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("store: migrate: %w", err)
 	}
 	return &sqliteStore{sqliteBase: sqliteBase{q: db}, db: db}, nil
+}
+
+// migrateCoverageCells upgrades a legacy coverage_cells table whose primary key
+// omitted bin_id (one coverage slot per turn node regardless of bin) to the
+// per-bin schema. Coverage cells are keyed by (task_id, bin_id, turn_node) so a
+// partial-bin submission cannot be mistaken for full coverage. A legacy table
+// that predates the bin-scoped key is dropped; the CREATE TABLE step that
+// follows rebuilds it with the current schema. Dropping is safe because legacy
+// coverage data was ambiguous by bin and cannot be recovered into the new key.
+func migrateCoverageCells(ctx context.Context, db *sql.DB) error {
+	// Determine the primary-key columns of coverage_cells, if the table already
+	// exists. group_concat is an aggregate: when the table is absent the join
+	// yields no rows and the aggregate returns a single NULL, so scan into a
+	// nullable string.
+	var pkCols sql.NullString
+	row := db.QueryRowContext(ctx, `SELECT group_concat(coalesce(c.name, ''), ',')
+		FROM sqlite_master t
+		JOIN pragma_index_list(t.name) il ON il.origin = 'pk'
+		JOIN pragma_index_info(il.name) ii
+		LEFT JOIN pragma_table_info(t.name) c ON c.cid = ii.cid
+		WHERE t.type = 'table' AND t.name = 'coverage_cells'
+		ORDER BY ii.seqno`)
+	if err := row.Scan(&pkCols); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil // table absent or no pk: CREATE TABLE builds the current schema
+		}
+		return err
+	}
+	if !pkCols.Valid {
+		return nil // table absent: CREATE TABLE builds the current schema
+	}
+	// The current schema keys coverage cells by (task_id, bin_id, turn_node).
+	// Any other key set is a legacy table that predates bin-scoped coverage and
+	// must be rebuilt.
+	switch pkCols.String {
+	case "task_id,bin_id,turn_node", "bin_id,task_id,turn_node":
+		return nil
+	}
+	_, err := db.ExecContext(ctx, `DROP TABLE IF EXISTS coverage_cells`)
+	return err
 }
 
 // sqliteStore is the top-level SQLite-backed Store.
@@ -423,7 +467,7 @@ func (s *sqliteBase) ListCoverageCells(ctx context.Context, taskID string) ([]ev
 	rows, err := s.q.QueryContext(ctx,
 		`SELECT task_id, generation, bin_id, turn_node, temperature_centi_c,
 		        duration_minutes, turn_count, gap_fill_flag, slope_milli_per_min, valid
-		 FROM coverage_cells WHERE task_id = ? ORDER BY turn_node`, taskID)
+		 FROM coverage_cells WHERE task_id = ? ORDER BY bin_id, turn_node`, taskID)
 	if err != nil {
 		return nil, err
 	}
