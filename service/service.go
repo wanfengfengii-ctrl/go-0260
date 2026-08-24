@@ -85,8 +85,21 @@ type Service struct {
 
 // New constructs a Service. equipment and adapters may be nil to disable
 // equipment validation and instrument calls respectively.
+//
+// The deterministic tick and sequence generators are reseeded from the
+// persisted high-watermarks so that, after a restart, every new task id and
+// logical tick stays strictly above what is already on disk. Without this
+// reseed the in-memory counters reset to zero and the next lock would mint a
+// colliding id (e.g. task-1) that the SQLite store silently overwrites via
+// INSERT OR REPLACE, corrupting the original task while its old leases linger
+// as orphaned audit rows.
 func New(st store.Store, cat catalog.RuleCatalog, equip *catalog.EquipmentDirectory, reg *adapter.Registry) *Service {
-	return &Service{store: st, catalog: cat, equipment: equip, adapters: reg}
+	s := &Service{store: st, catalog: cat, equipment: equip, adapters: reg}
+	if maxTick, maxSeq, err := st.HighWatermarks(context.Background()); err == nil {
+		s.tick.Store(maxTick)
+		s.seq.Store(maxSeq)
+	}
+	return s
 }
 
 func (s *Service) nextID(prefix string) string {

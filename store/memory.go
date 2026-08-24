@@ -364,6 +364,61 @@ func (c *memCore) GetCredential(_ context.Context, taskID string) (evidence.Fina
 	return cr, ok, nil
 }
 
+// HighWatermarks scans in-memory records for the highest logical tick and the
+// highest numeric suffix on any generated identifier. Used to reseed the
+// service generators so a freshly constructed service stays strictly above
+// rows already held in memory.
+func (c *memCore) HighWatermarks(_ context.Context) (maxTick, maxSeq int64, err error) {
+	for _, t := range c.tasks {
+		if t.CreatedAtTick > maxTick {
+			maxTick = t.CreatedAtTick
+		}
+		if n := parseIDSuffix(t.TaskID); n > maxSeq {
+			maxSeq = n
+		}
+	}
+	for _, l := range c.leases {
+		if l.AcquiredAtTick > maxTick {
+			maxTick = l.AcquiredAtTick
+		}
+	}
+	for _, o := range c.operations {
+		if o.CreatedAtTick > maxTick {
+			maxTick = o.CreatedAtTick
+		}
+	}
+	for _, e := range c.evidence {
+		if e.CreatedAtTick > maxTick {
+			maxTick = e.CreatedAtTick
+		}
+		if n := parseIDSuffix(e.EvidenceID); n > maxSeq {
+			maxSeq = n
+		}
+	}
+	for _, a := range c.attempts {
+		if a.LogicalTick > maxTick {
+			maxTick = a.LogicalTick
+		}
+		if n := parseIDSuffix(a.AttemptID); n > maxSeq {
+			maxSeq = n
+		}
+	}
+	for _, r := range c.reviews {
+		if r.CreatedAtTick > maxTick {
+			maxTick = r.CreatedAtTick
+		}
+	}
+	for _, cr := range c.creds {
+		if cr.IssuedAtTick > maxTick {
+			maxTick = cr.IssuedAtTick
+		}
+		if n := parseIDSuffix(cr.CredentialID); n > maxSeq {
+			maxSeq = n
+		}
+	}
+	return maxTick, maxSeq, nil
+}
+
 // Memory is the in-memory Store with copy-on-write transactional semantics.
 type Memory struct {
 	mu   chan struct{}
@@ -489,4 +544,9 @@ func (m *Memory) GetCredential(ctx context.Context, id string) (evidence.FinalCr
 	m.lock()
 	defer m.unlock()
 	return m.core.GetCredential(ctx, id)
+}
+func (m *Memory) HighWatermarks(ctx context.Context) (int64, int64, error) {
+	m.lock()
+	defer m.unlock()
+	return m.core.HighWatermarks(ctx)
 }

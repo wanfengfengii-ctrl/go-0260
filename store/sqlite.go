@@ -581,6 +581,54 @@ func (s *sqliteBase) GetCredential(ctx context.Context, taskID string) (evidence
 	return c, true, nil
 }
 
+// HighWatermarks scans persisted rows for the highest logical tick and the
+// highest numeric suffix carried by any generated identifier. It powers the
+// service-level generator reseed on restart so new ids and ticks stay strictly
+// above what is already on disk and never overwrite existing rows. Both values
+// are zero when no rows exist.
+func (s *sqliteBase) HighWatermarks(ctx context.Context) (maxTick, maxSeq int64, err error) {
+	// Single scan over every tick column; COALESCE collapses NULLs from empty
+	// tables. MAX returns NULL for an empty table, which COALESCE maps to 0.
+	tickQuery := `
+SELECT COALESCE(MAX(v), 0) FROM (
+  SELECT created_at_tick AS v FROM tasks
+  UNION ALL SELECT acquired_at_tick FROM leases
+  UNION ALL SELECT created_at_tick FROM operations
+  UNION ALL SELECT created_at_tick FROM evidence
+  UNION ALL SELECT logical_tick FROM adapter_attempts
+  UNION ALL SELECT created_at_tick FROM reviews
+  UNION ALL SELECT issued_at_tick FROM credentials
+)`
+	if err = s.q.QueryRowContext(ctx, tickQuery).Scan(&maxTick); err != nil {
+		return 0, 0, err
+	}
+	// Identifier columns across the generated-id families: tasks, evidence,
+	// adapter attempts, and credentials. Each id is "<prefix>-<n>"; we parse
+	// the suffix to reseed the shared sequence generator.
+	idQuery := `
+SELECT id FROM (
+  SELECT task_id AS id FROM tasks
+  UNION ALL SELECT evidence_id FROM evidence
+  UNION ALL SELECT attempt_id FROM adapter_attempts
+  UNION ALL SELECT credential_id FROM credentials
+)`
+	rows, err := s.q.QueryContext(ctx, idQuery)
+	if err != nil {
+		return 0, 0, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			return 0, 0, err
+		}
+		if n := parseIDSuffix(id); n > maxSeq {
+			maxSeq = n
+		}
+	}
+	return maxTick, maxSeq, rows.Err()
+}
+
 func boolInt(b bool) int {
 	if b {
 		return 1

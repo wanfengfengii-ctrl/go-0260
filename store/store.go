@@ -70,6 +70,15 @@ type Store interface {
 	SaveCredential(ctx context.Context, c evidence.FinalCredential) error
 	GetCredential(ctx context.Context, taskID string) (evidence.FinalCredential, bool, error)
 
+	// HighWatermarks scans persisted records and reports the highest logical
+	// tick and the highest numeric suffix used by any generated identifier
+	// (task-<n>, evidence-<n>, attempt-<n>, credential-<n>). A freshly started
+	// service uses these to seed its in-memory generators so that, after a
+	// restart, new ids and ticks stay strictly above what is already on disk
+	// and never collide with or overwrite existing rows. Both values are zero
+	// when the store holds no records.
+	HighWatermarks(ctx context.Context) (maxTick, maxSeq int64, err error)
+
 	// InTx runs fn against a transaction-scoped Store. The transaction is
 	// committed only if fn returns nil; any error aborts and rolls back.
 	InTx(ctx context.Context, fn func(tx Store) error) error
