@@ -1,6 +1,6 @@
-# cacao-ferment-yard-release-gate
+基于 Go 实现的可可发酵箱转晒联检 Web 项目，一款前后端应用，完成批次锁定、温升采集、样本复测与转晒裁定。
 
-本 Git 项目来自模型完成任务后的 workspace，不包含嵌套 .git 记录或本地构建产物。
+# cacao-ferment-yard-release-gate
 
 ## 本地构建与测试
 
